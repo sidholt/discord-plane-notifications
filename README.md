@@ -3,10 +3,11 @@
 A small script that watches for aircraft flying near one or more locations
 and posts an alert to a Discord channel when one comes within range. It
 polls the free [OpenSky Network](https://opensky-network.org/) API for live
-positions, and enriches each alert with route, aircraft type, and tail
-number from [FlightAware AeroAPI](https://www.flightaware.com/aeroapi/portal/)
-(if configured), [adsbdb](https://www.adsbdb.com/), and
-[hexdb.io](https://hexdb.io/).
+positions, and enriches each alert with route, aircraft type, tail number,
+and — when available — a real photo of that specific tail number, from
+[FlightAware AeroAPI](https://www.flightaware.com/aeroapi/portal/) (if
+configured), [adsbdb](https://www.adsbdb.com/), [hexdb.io](https://hexdb.io/),
+and [planespotters.net](https://www.planespotters.net/).
 
 Example alert:
 
@@ -102,6 +103,12 @@ Each route airport is labeled with a US state abbreviation or an ISO
 country code (e.g. "Chicago, IL" vs "London, GB"), reverse-geocoded from
 its coordinates via the free Nominatim/OpenStreetMap API and cached per
 airport for the life of the process.
+
+If a photo of that specific tail number exists on planespotters.net, it's
+attached to the Discord message as an embed, crediting the photographer and
+linking back to the photo page. Falls back to adsbdb's bundled photo link
+(sourced from airport-data.com) if planespotters has nothing. No photo line
+appears at all if neither source has one.
 
 ## Notes
 
