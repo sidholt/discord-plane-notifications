@@ -104,10 +104,11 @@ terms of service for automated access — it's kept rare by only firing on
 routes that already look wrong, and cached per callsign. Aircraft type/tail
 number lookups try adsbdb first, then hexdb.io.
 
-Each route airport is labeled with a US state abbreviation or an ISO
-country code (e.g. "Chicago, IL" vs "London, GB"), reverse-geocoded from
-its coordinates via the free Nominatim/OpenStreetMap API and cached per
-airport for the life of the process.
+Each route airport is labeled with a US state or Canadian province
+abbreviation, or an ISO country code for everywhere else (e.g. "Chicago,
+IL" / "Toronto, ON" vs "London, GB"), reverse-geocoded from its coordinates
+via the free Nominatim/OpenStreetMap API and cached per airport for the life
+of the process.
 
 If a photo of that specific tail number exists on planespotters.net, it's
 attached to the Discord message as an embed, crediting the photographer and
