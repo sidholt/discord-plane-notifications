@@ -16,6 +16,7 @@ Setup:
      service / cron-launched process)
 """
 
+import json
 import os
 import re
 import time
@@ -91,6 +92,7 @@ AIRCRAFT_INFO_CACHE = {}
 ROUTE_INFO_CACHE = {}
 AIRPORT_REGION_CACHE = {}
 PHOTO_CACHE = {}
+SCRAPED_ROUTE_CACHE = {}
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -480,6 +482,127 @@ def lookup_airport_region(lat, lon):
     return result
 
 
+# adsbdb/hexdb route data is a static "usual route for this flight number" table, and
+# airlines reuse flight numbers across totally different routes on different days -- so the
+# stored route can name a destination the plane obviously isn't flying toward. We detect
+# that by comparing the plane's actual live heading to the bearing toward the claimed
+# destination; a big mismatch means the stored route is probably stale, which is our cue to
+# scrape FlightAware for the real one. This heading check is only ever used as that trigger
+# -- it never changes what's shown to the user directly.
+ROUTE_PLAUSIBILITY_THRESHOLD_DEG = 70
+# Below this altitude, headings are unreliable (climb-out/approach turns), so treat the
+# route as plausible (don't bother scraping) rather than acting on a noisy heading.
+ROUTE_PLAUSIBILITY_MIN_ALTITUDE_M = 1500
+
+
+def bearing_diff(a, b):
+    d = abs(a - b) % 360
+    return min(d, 360 - d)
+
+
+def route_is_plausible(route, plane_lat, plane_lon, altitude_m, true_track):
+    """Does the plane's actual heading roughly point toward its claimed destination?
+    Returns True whenever we don't have enough data to judge, so we only ever flag routes
+    we're fairly confident are stale/wrong."""
+    if true_track is None or not altitude_m or altitude_m < ROUTE_PLAUSIBILITY_MIN_ALTITUDE_M:
+        return True
+
+    destination = (route or {}).get("destination") or {}
+    dest_lat, dest_lon = destination.get("latitude"), destination.get("longitude")
+    if dest_lat is None or dest_lon is None:
+        return True
+
+    expected_bearing = bearing_deg(plane_lat, plane_lon, dest_lat, dest_lon)
+    return bearing_diff(expected_bearing, true_track) <= ROUTE_PLAUSIBILITY_THRESHOLD_DEG
+
+
+def _extract_balanced_json(text, start):
+    """Given text and the index right after an opening '{', return the matching
+    closing '}' index (inclusive) by brace counting, or None if unbalanced."""
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
+def _pick_current_leg(trackpoll_data):
+    """From FlightAware's embedded trackpollBootstrap data, pick the flight leg that's
+    currently airborne (has an actual takeoff but no actual landing yet); fall back to
+    the first leg found if none match."""
+    fallback = None
+    for flight_entry in (trackpoll_data or {}).get("flights", {}).values():
+        for leg in (flight_entry.get("activityLog") or {}).get("flights", []):
+            if fallback is None:
+                fallback = leg
+            takeoff = (leg.get("takeoffTimes") or {}).get("actual")
+            landing = (leg.get("landingTimes") or {}).get("actual")
+            if takeoff and not landing:
+                return leg
+    return fallback
+
+
+def lookup_flightroute_scrape_flightaware(callsign):
+    """Scrape FlightAware's public flight-status page for a callsign's real, live route.
+    Called only when the stored adsbdb/hexdb route disagrees with the plane's actual heading
+    (see route_is_plausible), so it fires rarely and is cached per callsign. This parses a
+    JS object (trackpollBootstrap) embedded in the page's server-rendered HTML rather than a
+    documented API -- it's fragile (breaks if FlightAware changes their page), likely against
+    their terms of service for automated access, and could get this script's IP blocked if
+    called often. Returns a dict with 'origin'/'destination', or None on any failure."""
+    if callsign in SCRAPED_ROUTE_CACHE:
+        return SCRAPED_ROUTE_CACHE[callsign]
+
+    result = None
+    try:
+        resp = requests.get(
+            f"https://www.flightaware.com/live/flight/{callsign}",
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        html = resp.text
+
+        marker = "var trackpollBootstrap = "
+        start = html.find(marker)
+        if start != -1:
+            start += len(marker)
+            end = _extract_balanced_json(html, start)
+            if end is not None:
+                leg = _pick_current_leg(json.loads(html[start:end]))
+                if leg:
+                    def to_airport(ap):
+                        ap = ap or {}
+                        lon, lat = (ap.get("coord") or [None, None])[:2]
+                        # friendlyLocation is like "San Francisco, CA" / "Mexico City, Mexico"
+                        # -- keep only the city part so describe_airport can append the
+                        # reverse-geocoded region code without duplicating it.
+                        friendly = ap.get("friendlyLocation") or ""
+                        city = friendly.split(",")[0].strip() or None
+                        return {
+                            "municipality": city,
+                            "name": ap.get("friendlyName"),
+                            "iata_code": ap.get("iata"),
+                            "icao_code": ap.get("icao"),
+                            "latitude": lat,
+                            "longitude": lon,
+                        }
+
+                    origin = to_airport(leg.get("origin"))
+                    destination = to_airport(leg.get("destination"))
+                    if origin.get("icao_code") or destination.get("icao_code"):
+                        result = {"origin": origin, "destination": destination}
+    except (requests.RequestException, ValueError, KeyError, IndexError, AttributeError):
+        result = None
+
+    SCRAPED_ROUTE_CACHE[callsign] = result
+    return result
+
+
 def describe_airport(airport):
     name = airport.get("municipality") or airport.get("name")
     code = airport.get("iata_code") or airport.get("icao_code")
@@ -527,6 +650,7 @@ def format_alert(state, distance_mi, location):
     plane_lon, plane_lat = state[5], state[6]
     altitude_m = state[7] or state[13]
     velocity_ms = state[9]
+    true_track = state[10]
 
     direction = compass_direction(bearing_deg(location["lat"], location["lon"], plane_lat, plane_lon))
 
@@ -538,6 +662,12 @@ def format_alert(state, distance_mi, location):
     registration = (aircraft or {}).get("registration") or icao24_to_n_number(icao24) or "unknown"
 
     route = lookup_flightroute(callsign) if callsign != "unknown" else None
+    # If the stored route disagrees with the plane's actual heading, it's probably a stale
+    # flight-number reuse -- scrape FlightAware for the real live route and use that instead.
+    if route and not route_is_plausible(route, plane_lat, plane_lon, altitude_m, true_track):
+        scraped_route = lookup_flightroute_scrape_flightaware(callsign)
+        if scraped_route:
+            route = {**route, "origin": scraped_route.get("origin"), "destination": scraped_route.get("destination")}
     route_str = format_route(route) or "not available"
 
     display_callsign = spell_out_callsign(route, callsign) if callsign != "unknown" else callsign
