@@ -446,10 +446,15 @@ def lookup_flightroute(callsign):
     return result
 
 
+# Countries for which we show the 2-letter subdivision code (state/province) instead of the
+# country code, since their subdivisions are commonly referred to that way.
+REGION_SUBDIVISION_COUNTRIES = {"US", "CA"}
+
+
 def lookup_airport_region(lat, lon):
     """Reverse-geocode airport coordinates (via the free Nominatim/OpenStreetMap API) to a
-    2-letter region code: a US state abbreviation (e.g. 'IL') for US airports, or an ISO
-    country code (e.g. 'GB') for everywhere else. Returns None on any failure or if
+    2-letter region code: a US state or Canadian province abbreviation (e.g. 'IL', 'ON'), or
+    an ISO country code (e.g. 'GB') for everywhere else. Returns None on any failure or if
     coordinates are unavailable. Cached per rounded coordinate since airports don't move."""
     if lat is None or lon is None:
         return None
@@ -469,8 +474,8 @@ def lookup_airport_region(lat, lon):
         resp.raise_for_status()
         address = resp.json().get("address") or {}
         country_code = (address.get("country_code") or "").upper()
-        if country_code == "US":
-            iso_region = address.get("ISO3166-2-lvl4")  # e.g. "US-IL"
+        if country_code in REGION_SUBDIVISION_COUNTRIES:
+            iso_region = address.get("ISO3166-2-lvl4")  # e.g. "US-IL", "CA-ON"
             if iso_region and "-" in iso_region:
                 result = iso_region.split("-", 1)[1]
         if not result:
