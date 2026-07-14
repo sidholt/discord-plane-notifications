@@ -85,6 +85,7 @@ KM_PER_MILE = 1.60934
 # icao24/callsign is often seen across multiple polls.
 AIRCRAFT_INFO_CACHE = {}
 ROUTE_INFO_CACHE = {}
+AIRPORT_REGION_CACHE = {}
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -386,12 +387,51 @@ def lookup_flightroute(callsign):
     return result
 
 
+def lookup_airport_region(lat, lon):
+    """Reverse-geocode airport coordinates (via the free Nominatim/OpenStreetMap API) to a
+    2-letter region code: a US state abbreviation (e.g. 'IL') for US airports, or an ISO
+    country code (e.g. 'GB') for everywhere else. Returns None on any failure or if
+    coordinates are unavailable. Cached per rounded coordinate since airports don't move."""
+    if lat is None or lon is None:
+        return None
+
+    cache_key = (round(lat, 2), round(lon, 2))
+    if cache_key in AIRPORT_REGION_CACHE:
+        return AIRPORT_REGION_CACHE[cache_key]
+
+    result = None
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": lat, "lon": lon, "format": "json", "zoom": 8},
+            headers={"User-Agent": "plane-tracker (personal hobby project)"},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        address = resp.json().get("address") or {}
+        country_code = (address.get("country_code") or "").upper()
+        if country_code == "US":
+            iso_region = address.get("ISO3166-2-lvl4")  # e.g. "US-IL"
+            if iso_region and "-" in iso_region:
+                result = iso_region.split("-", 1)[1]
+        if not result:
+            result = country_code or None
+    except (requests.RequestException, ValueError, AttributeError):
+        result = None
+
+    AIRPORT_REGION_CACHE[cache_key] = result
+    return result
+
+
 def describe_airport(airport):
     name = airport.get("municipality") or airport.get("name")
     code = airport.get("iata_code") or airport.get("icao_code")
-    if name and code:
-        return f"{name} ({code})"
-    return name or code or "unknown"
+    region = lookup_airport_region(airport.get("latitude"), airport.get("longitude"))
+
+    label = f"{name}, {region}" if name and region else (name or region)
+    if label and code:
+        return f"{label} ({code})"
+    return label or code or "unknown"
 
 
 def format_route(route):
@@ -448,6 +488,7 @@ def format_alert(state, distance_mi, location):
     lines = [
         f"✈️  **{display_callsign}**  —  {distance_mi:.1f} mi {direction} of {location['name']}",
         "",
+        f"\U0001F522 Flight: {callsign}",
         f"\U0001F6EB Route: {route_str}",
         f"\U0001F6E9️ Aircraft: {aircraft_type}",
         f"\U0001F3F7️ Tail: {registration}",
