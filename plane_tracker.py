@@ -489,36 +489,49 @@ def lookup_airport_region(lat, lon):
 
 # adsbdb/hexdb route data is a static "usual route for this flight number" table, and
 # airlines reuse flight numbers across totally different routes on different days -- so the
-# stored route can name a destination the plane obviously isn't flying toward. We detect
-# that by comparing the plane's actual live heading to the bearing toward the claimed
-# destination; a big mismatch means the stored route is probably stale, which is our cue to
-# scrape FlightAware for the real one. This heading check is only ever used as that trigger
-# -- it never changes what's shown to the user directly.
-ROUTE_PLAUSIBILITY_THRESHOLD_DEG = 70
-# Below this altitude, headings are unreliable (climb-out/approach turns), so treat the
-# route as plausible (don't bother scraping) rather than acting on a noisy heading.
-ROUTE_PLAUSIBILITY_MIN_ALTITUDE_M = 1500
+# stored route can be a completely different flight than the plane overhead. We detect that
+# by measuring how far the plane is from the great-circle corridor between the stored route's
+# origin and destination: a plane genuinely flying that route stays within tens of km of the
+# corridor, so being hundreds of km off means the stored route is stale/wrong -- our cue to
+# scrape FlightAware for the real one. This check is only ever used as that trigger; it never
+# changes what's shown to the user directly. (An earlier version compared only the plane's
+# heading to the destination bearing, but that missed wrong routes whose destination happened
+# to lie in roughly the same direction as the plane's real one, e.g. both eastward.)
+ROUTE_CORRIDOR_THRESHOLD_KM = 200
 
 
-def bearing_diff(a, b):
-    d = abs(a - b) % 360
-    return min(d, 360 - d)
+def distance_to_route_km(plane_lat, plane_lon, o_lat, o_lon, d_lat, d_lon):
+    """Shortest distance from the plane to the great-circle arc between origin and
+    destination (cross-track distance when the perpendicular foot falls on the arc, else
+    the distance to the nearer endpoint)."""
+    d13 = haversine_km(o_lat, o_lon, plane_lat, plane_lon) / EARTH_RADIUS_KM  # angular
+    theta13 = math.radians(bearing_deg(o_lat, o_lon, plane_lat, plane_lon))
+    theta12 = math.radians(bearing_deg(o_lat, o_lon, d_lat, d_lon))
+    dxt = math.asin(max(-1.0, min(1.0, math.sin(d13) * math.sin(theta13 - theta12))))
+    cos_dxt = math.cos(dxt)
+    dat = math.acos(max(-1.0, min(1.0, math.cos(d13) / cos_dxt))) if cos_dxt else 0.0
+    along_track_km = dat * EARTH_RADIUS_KM
+    seg_len_km = haversine_km(o_lat, o_lon, d_lat, d_lon)
+    if 0 <= along_track_km <= seg_len_km:
+        return abs(dxt) * EARTH_RADIUS_KM
+    return min(
+        haversine_km(plane_lat, plane_lon, o_lat, o_lon),
+        haversine_km(plane_lat, plane_lon, d_lat, d_lon),
+    )
 
 
-def route_is_plausible(route, plane_lat, plane_lon, altitude_m, true_track):
-    """Does the plane's actual heading roughly point toward its claimed destination?
-    Returns True whenever we don't have enough data to judge, so we only ever flag routes
-    we're fairly confident are stale/wrong."""
-    if true_track is None or not altitude_m or altitude_m < ROUTE_PLAUSIBILITY_MIN_ALTITUDE_M:
-        return True
-
+def route_is_plausible(route, plane_lat, plane_lon):
+    """Is the plane actually near the stored route's flight corridor? Returns True whenever
+    we lack the coordinates to judge (e.g. hexdb routes carry only airport codes), so we only
+    ever flag routes we're fairly confident are stale/wrong."""
+    origin = (route or {}).get("origin") or {}
     destination = (route or {}).get("destination") or {}
-    dest_lat, dest_lon = destination.get("latitude"), destination.get("longitude")
-    if dest_lat is None or dest_lon is None:
+    o_lat, o_lon = origin.get("latitude"), origin.get("longitude")
+    d_lat, d_lon = destination.get("latitude"), destination.get("longitude")
+    if None in (o_lat, o_lon, d_lat, d_lon):
         return True
 
-    expected_bearing = bearing_deg(plane_lat, plane_lon, dest_lat, dest_lon)
-    return bearing_diff(expected_bearing, true_track) <= ROUTE_PLAUSIBILITY_THRESHOLD_DEG
+    return distance_to_route_km(plane_lat, plane_lon, o_lat, o_lon, d_lat, d_lon) <= ROUTE_CORRIDOR_THRESHOLD_KM
 
 
 def _extract_balanced_json(text, start):
@@ -655,7 +668,6 @@ def format_alert(state, distance_mi, location):
     plane_lon, plane_lat = state[5], state[6]
     altitude_m = state[7] or state[13]
     velocity_ms = state[9]
-    true_track = state[10]
 
     direction = compass_direction(bearing_deg(location["lat"], location["lon"], plane_lat, plane_lon))
 
@@ -667,9 +679,9 @@ def format_alert(state, distance_mi, location):
     registration = (aircraft or {}).get("registration") or icao24_to_n_number(icao24) or "unknown"
 
     route = lookup_flightroute(callsign) if callsign != "unknown" else None
-    # If the stored route disagrees with the plane's actual heading, it's probably a stale
+    # If the plane is nowhere near the stored route's corridor, it's probably a stale
     # flight-number reuse -- scrape FlightAware for the real live route and use that instead.
-    if route and not route_is_plausible(route, plane_lat, plane_lon, altitude_m, true_track):
+    if route and not route_is_plausible(route, plane_lat, plane_lon):
         scraped_route = lookup_flightroute_scrape_flightaware(callsign)
         if scraped_route:
             route = {**route, "origin": scraped_route.get("origin"), "destination": scraped_route.get("destination")}
