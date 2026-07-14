@@ -94,10 +94,15 @@ first (if configured) for the real live route, then adsbdb, then hexdb.io.
 The latter two are static "usual route for this flight number" tables
 sourced from crowdsourced/historical data, not the actual flight plan for
 today — airlines reuse flight numbers across different routes on different
-days, so without an AeroAPI key you may occasionally see an origin/
-destination that doesn't match what the plane is actually doing right now.
-Aircraft type/tail number lookups try adsbdb first, then hexdb.io. Whatever
-route a source returns is shown as-is, with no attempt to second-guess it.
+days, so their stored route is sometimes completely wrong for the plane
+actually overhead. To catch that, each stored route's destination is
+compared against the plane's live heading; when they clearly disagree, the
+script scrapes FlightAware's public flight page for the real live route and
+shows that instead. This scrape parses data embedded in a webpage rather
+than a documented API, so it's fragile and likely against FlightAware's
+terms of service for automated access — it's kept rare by only firing on
+routes that already look wrong, and cached per callsign. Aircraft type/tail
+number lookups try adsbdb first, then hexdb.io.
 
 Each route airport is labeled with a US state abbreviation or an ISO
 country code (e.g. "Chicago, IL" vs "London, GB"), reverse-geocoded from
