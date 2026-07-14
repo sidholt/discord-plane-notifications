@@ -95,14 +95,16 @@ The latter two are static "usual route for this flight number" tables
 sourced from crowdsourced/historical data, not the actual flight plan for
 today — airlines reuse flight numbers across different routes on different
 days, so their stored route is sometimes completely wrong for the plane
-actually overhead. To catch that, each stored route's destination is
-compared against the plane's live heading; when they clearly disagree, the
-script scrapes FlightAware's public flight page for the real live route and
-shows that instead. This scrape parses data embedded in a webpage rather
-than a documented API, so it's fragile and likely against FlightAware's
-terms of service for automated access — it's kept rare by only firing on
-routes that already look wrong, and cached per callsign. Aircraft type/tail
-number lookups try adsbdb first, then hexdb.io.
+actually overhead. To catch that, the script measures how far the plane is
+from the great-circle corridor between the stored route's origin and
+destination; a plane genuinely on that route stays within tens of km of the
+corridor, so when it's hundreds of km off, the stored route is treated as
+stale and the script scrapes FlightAware's public flight page for the real
+live route and shows that instead. This scrape parses data embedded in a
+webpage rather than a documented API, so it's fragile and likely against
+FlightAware's terms of service for automated access — it's kept rare by only
+firing on routes that already look wrong, and cached per callsign. Aircraft
+type/tail number lookups try adsbdb first, then hexdb.io.
 
 Each route airport is labeled with a US state or Canadian province
 abbreviation, or an ISO country code for everywhere else (e.g. "Chicago,
