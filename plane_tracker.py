@@ -153,8 +153,14 @@ def get_opensky_token():
     return resp.json()["access_token"]
 
 
-def send_discord_message(content, photo=None):
+def send_discord_message(content, photo=None, username=None):
+    # Discord visually groups consecutive messages from the same webhook "author" (matching
+    # username+avatar) into a compact block with no repeated header, which is what makes a
+    # run of alerts look strung together -- varying the username per message (e.g. by
+    # callsign) breaks that grouping so each alert renders as its own distinct block.
     payload = {"content": content}
+    if username:
+        payload["username"] = username
     if photo and photo.get("url"):
         embed = {"image": {"url": photo["url"]}}
         if photo.get("link"):
@@ -589,7 +595,9 @@ def main():
                         last_sent = last_notified.get(key)
                         if last_sent is None or (now - last_sent) >= cooldown_sec:
                             photo = lookup_aircraft_photo(icao24, lookup_aircraft(icao24))
-                            send_discord_message(format_alert(state, distance_mi, loc), photo)
+                            callsign_raw = (state[1] or "").strip() or icao24
+                            username = f"Plane Tracker — {callsign_raw}"
+                            send_discord_message(format_alert(state, distance_mi, loc), photo, username)
                             last_notified[key] = now
                             print(f"Notified: {icao24} at {distance_mi:.1f} mi from {loc['name']}")
 
