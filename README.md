@@ -13,7 +13,8 @@ Example alert:
 ```
 ✈️  United 123  —  12.3 mi NE of Home
 
-🛫 Route: Anchorage (ANC) → Chicago (ORD)
+🔢 Flight: UAL123
+🛫 Route: Anchorage, AK (ANC) → Chicago, IL (ORD)
 🛩️ Aircraft: Boeing 737NG 8AS/W
 🏷️ Tail: EI-EGA
 📈 Altitude: 11484 ft
@@ -96,6 +97,11 @@ days, so without an AeroAPI key you may occasionally see an origin/
 destination that doesn't match what the plane is actually doing right now.
 Aircraft type/tail number lookups try adsbdb first, then hexdb.io. Whatever
 route a source returns is shown as-is, with no attempt to second-guess it.
+
+Each route airport is labeled with a US state abbreviation or an ISO
+country code (e.g. "Chicago, IL" vs "London, GB"), reverse-geocoded from
+its coordinates via the free Nominatim/OpenStreetMap API and cached per
+airport for the life of the process.
 
 ## Notes
 
