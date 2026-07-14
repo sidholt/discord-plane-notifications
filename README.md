@@ -94,23 +94,8 @@ sourced from crowdsourced/historical data, not the actual flight plan for
 today — airlines reuse flight numbers across different routes on different
 days, so without an AeroAPI key you may occasionally see an origin/
 destination that doesn't match what the plane is actually doing right now.
-Aircraft type/tail number lookups try adsbdb first, then hexdb.io.
-
-To catch the worst of those stale/wrong routes, each one is sanity-checked
-against the plane's actual live heading (`route_is_plausible` in
-`plane_tracker.py`) before being shown — if the bearing toward the claimed
-destination is wildly inconsistent with where the plane is actually pointed,
-the Route line is dropped rather than showing something likely wrong. As a
-last resort for a route that fails this check, the script will scrape
-FlightAware's public flight-status page for the real route
-(`lookup_flightroute_scrape_flightaware`). This is different from the other
-sources: it's not a documented API, it parses data embedded in a webpage
-meant for browsers, it's likely against FlightAware's terms of service for
-automated access, and it could break or get this script's IP blocked. It's
-scoped to fire only on already-flagged routes and caches its result per
-callsign to keep it rare — but if you'd rather not do that at all, it's easy
-to remove: just have the `route_is_plausible` check in `format_alert` set
-`display_route = None` directly instead of calling the scrape function.
+Aircraft type/tail number lookups try adsbdb first, then hexdb.io. Whatever
+route a source returns is shown as-is, with no attempt to second-guess it.
 
 ## Notes
 
