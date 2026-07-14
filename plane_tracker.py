@@ -76,6 +76,10 @@ OPENSKY_CLIENT_SECRET = os.environ.get("OPENSKY_CLIENT_SECRET")
 # Leave unset to skip this source and rely on adsbdb/hexdb only.
 FLIGHTAWARE_API_KEY = os.environ.get("FLIGHTAWARE_API_KEY")
 
+# planespotters.net requires a descriptive User-Agent identifying the app and a contact
+# URL/email (generic library user agents get a 403) -- see https://www.planespotters.net/photo/api
+PLANESPOTTERS_USER_AGENT = "plane-tracker/1.0 (+https://github.com/sidholt/plane-tracker)"
+
 # --------------------------------------------------------
 
 EARTH_RADIUS_KM = 6371.0
@@ -86,6 +90,7 @@ KM_PER_MILE = 1.60934
 AIRCRAFT_INFO_CACHE = {}
 ROUTE_INFO_CACHE = {}
 AIRPORT_REGION_CACHE = {}
+PHOTO_CACHE = {}
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -148,8 +153,17 @@ def get_opensky_token():
     return resp.json()["access_token"]
 
 
-def send_discord_message(content):
-    resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": content}, timeout=10)
+def send_discord_message(content, photo=None):
+    payload = {"content": content}
+    if photo and photo.get("url"):
+        embed = {"image": {"url": photo["url"]}}
+        if photo.get("link"):
+            embed["url"] = photo["link"]
+        if photo.get("photographer"):
+            embed["footer"] = {"text": f"Photo by {photo['photographer']} via planespotters.net"}
+        payload["embeds"] = [embed]
+
+    resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
     resp.raise_for_status()
 
 
@@ -194,6 +208,43 @@ def lookup_aircraft(icao24):
     result = lookup_aircraft_adsbdb(icao24) or lookup_aircraft_hexdb(icao24)
 
     AIRCRAFT_INFO_CACHE[icao24] = result
+    return result
+
+
+def lookup_aircraft_photo(icao24, aircraft):
+    """Look up a photo of this specific tail number, trying planespotters.net first (real
+    spotter photos, credited to the photographer) and falling back to adsbdb's bundled
+    photo link if planespotters has nothing. Returns a dict with 'url' (always present if
+    the dict isn't None), plus optional 'link' (photo page) and 'photographer', or None if
+    no photo is available anywhere."""
+    if icao24 in PHOTO_CACHE:
+        return PHOTO_CACHE[icao24]
+
+    result = None
+    try:
+        resp = requests.get(
+            f"https://api.planespotters.net/pub/photos/hex/{icao24}",
+            headers={"User-Agent": PLANESPOTTERS_USER_AGENT},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        photos = resp.json().get("photos") or []
+        if photos:
+            photo = photos[0]
+            url = (photo.get("thumbnail_large") or photo.get("thumbnail") or {}).get("src")
+            if url:
+                result = {
+                    "url": url,
+                    "link": photo.get("link"),
+                    "photographer": photo.get("photographer"),
+                }
+    except (requests.RequestException, ValueError, AttributeError):
+        pass
+
+    if not result and aircraft and aircraft.get("url_photo"):
+        result = {"url": aircraft["url_photo"], "link": None, "photographer": None}
+
+    PHOTO_CACHE[icao24] = result
     return result
 
 
@@ -537,7 +588,8 @@ def main():
                         key = (icao24, loc["name"])
                         last_sent = last_notified.get(key)
                         if last_sent is None or (now - last_sent) >= cooldown_sec:
-                            send_discord_message(format_alert(state, distance_mi, loc))
+                            photo = lookup_aircraft_photo(icao24, lookup_aircraft(icao24))
+                            send_discord_message(format_alert(state, distance_mi, loc), photo)
                             last_notified[key] = now
                             print(f"Notified: {icao24} at {distance_mi:.1f} mi from {loc['name']}")
 
