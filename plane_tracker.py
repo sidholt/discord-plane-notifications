@@ -16,7 +16,6 @@ Setup:
      service / cron-launched process)
 """
 
-import json
 import os
 import re
 import time
@@ -86,7 +85,6 @@ KM_PER_MILE = 1.60934
 # icao24/callsign is often seen across multiple polls.
 AIRCRAFT_INFO_CACHE = {}
 ROUTE_INFO_CACHE = {}
-SCRAPED_ROUTE_CACHE = {}
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -119,37 +117,6 @@ COMPASS_POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
 
 def compass_direction(bearing):
     return COMPASS_POINTS[round(bearing / 22.5) % 16]
-
-
-# How far (in degrees) the plane's actual heading is allowed to diverge from the bearing
-# toward its claimed destination before we treat the route as probably stale/wrong and
-# hide it. adsbdb/hexdb's route data is a static "usual route for this flight number"
-# table, not a live flight plan, so it can point somewhere the plane obviously isn't going.
-ROUTE_PLAUSIBILITY_THRESHOLD_DEG = 70
-# Below this altitude, headings are unreliable (climb-out/approach turns), so skip the
-# check rather than risk hiding a genuinely correct route.
-ROUTE_PLAUSIBILITY_MIN_ALTITUDE_M = 1500
-
-
-def bearing_diff(a, b):
-    d = abs(a - b) % 360
-    return min(d, 360 - d)
-
-
-def route_is_plausible(route, plane_lat, plane_lon, altitude_m, true_track):
-    """Best-effort sanity check: does the plane's actual heading roughly point toward its
-    claimed destination? Returns True (i.e. "show it") whenever we don't have enough data
-    to judge, so this only ever suppresses routes we're fairly confident are wrong."""
-    if true_track is None or not altitude_m or altitude_m < ROUTE_PLAUSIBILITY_MIN_ALTITUDE_M:
-        return True
-
-    destination = (route or {}).get("destination") or {}
-    dest_lat, dest_lon = destination.get("latitude"), destination.get("longitude")
-    if dest_lat is None or dest_lon is None:
-        return True
-
-    expected_bearing = bearing_deg(plane_lat, plane_lon, dest_lat, dest_lon)
-    return bearing_diff(expected_bearing, true_track) <= ROUTE_PLAUSIBILITY_THRESHOLD_DEG
 
 
 def fetch_states(lat, lon, radius_mi):
@@ -419,89 +386,6 @@ def lookup_flightroute(callsign):
     return result
 
 
-def _extract_balanced_json(text, start):
-    """Given text and the index right after an opening '{', return the matching
-    closing '}' index (inclusive) by brace counting, or None if unbalanced."""
-    depth = 0
-    for i, ch in enumerate(text[start:], start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return i + 1
-    return None
-
-
-def _pick_current_leg(trackpoll_data):
-    """From FlightAware's embedded trackpollBootstrap data, pick the flight leg that's
-    currently airborne (has an actual takeoff but no actual landing yet); fall back to
-    the first leg found if none match."""
-    fallback = None
-    for flight_entry in (trackpoll_data or {}).get("flights", {}).values():
-        for leg in (flight_entry.get("activityLog") or {}).get("flights", []):
-            if fallback is None:
-                fallback = leg
-            takeoff = (leg.get("takeoffTimes") or {}).get("actual")
-            landing = (leg.get("landingTimes") or {}).get("actual")
-            if takeoff and not landing:
-                return leg
-    return fallback
-
-
-def lookup_flightroute_scrape_flightaware(callsign):
-    """LAST RESORT ONLY: scrape FlightAware's public flight-status page for a callsign's
-    real route, used only when every documented API has failed to produce a route that's
-    consistent with the plane's actual heading (see route_is_plausible). This parses a
-    JS object (trackpollBootstrap) embedded in the page's server-rendered HTML rather than
-    an API meant for programmatic use -- it's fragile (breaks if FlightAware changes their
-    page), likely against their terms of service for automated access, and could get this
-    script's IP blocked if called often. Kept deliberately rare: only fires on already-
-    flagged routes, and the result is cached per callsign. Returns None on any failure."""
-    if callsign in SCRAPED_ROUTE_CACHE:
-        return SCRAPED_ROUTE_CACHE[callsign]
-
-    result = None
-    try:
-        resp = requests.get(
-            f"https://www.flightaware.com/live/flight/{callsign}",
-            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        html = resp.text
-
-        marker = "var trackpollBootstrap = "
-        start = html.find(marker)
-        if start != -1:
-            start += len(marker)
-            end = _extract_balanced_json(html, start)
-            if end is not None:
-                leg = _pick_current_leg(json.loads(html[start:end]))
-                if leg:
-                    def to_airport(ap):
-                        ap = ap or {}
-                        lon, lat = (ap.get("coord") or [None, None])[:2]
-                        return {
-                            "municipality": ap.get("friendlyLocation"),
-                            "name": ap.get("friendlyName"),
-                            "iata_code": ap.get("iata"),
-                            "icao_code": ap.get("icao"),
-                            "latitude": lat,
-                            "longitude": lon,
-                        }
-
-                    origin = to_airport(leg.get("origin"))
-                    destination = to_airport(leg.get("destination"))
-                    if origin.get("icao_code") or destination.get("icao_code"):
-                        result = {"origin": origin, "destination": destination}
-    except (requests.RequestException, ValueError, KeyError, IndexError, AttributeError):
-        result = None
-
-    SCRAPED_ROUTE_CACHE[callsign] = result
-    return result
-
-
 def describe_airport(airport):
     name = airport.get("municipality") or airport.get("name")
     code = airport.get("iata_code") or airport.get("icao_code")
@@ -546,7 +430,6 @@ def format_alert(state, distance_mi, location):
     plane_lon, plane_lat = state[5], state[6]
     altitude_m = state[7] or state[13]
     velocity_ms = state[9]
-    true_track = state[10]
 
     direction = compass_direction(bearing_deg(location["lat"], location["lon"], plane_lat, plane_lon))
 
@@ -558,26 +441,7 @@ def format_alert(state, distance_mi, location):
     registration = (aircraft or {}).get("registration") or icao24_to_n_number(icao24) or "unknown"
 
     route = lookup_flightroute(callsign) if callsign != "unknown" else None
-    if route is None:
-        route_str = "not available"
-    elif route_is_plausible(route, plane_lat, plane_lon, altitude_m, true_track):
-        route_str = format_route(route) or "not available"
-    else:
-        # Every documented API gave us a route that doesn't match this plane's actual
-        # heading -- as a last resort, try scraping FlightAware's public flight page for
-        # the real one (see lookup_flightroute_scrape_flightaware's docstring for caveats).
-        scraped_route = lookup_flightroute_scrape_flightaware(callsign)
-        if scraped_route and route_is_plausible(scraped_route, plane_lat, plane_lon, altitude_m, true_track):
-            route_str = format_route(scraped_route) or "not available"
-        else:
-            # Nothing panned out -- still show the best guess we have (preferring the
-            # scraped one, since it's the more authoritative source) with a caveat,
-            # rather than hiding it outright.
-            best_guess = format_route(scraped_route or route)
-            if best_guess:
-                route_str = f"unable to verify, possibly {best_guess} (doesn't match this flight's heading)"
-            else:
-                route_str = "unable to verify (data doesn't match this flight's heading)"
+    route_str = format_route(route) or "not available"
 
     display_callsign = spell_out_callsign(route, callsign) if callsign != "unknown" else callsign
 
