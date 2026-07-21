@@ -81,6 +81,10 @@ FLIGHTAWARE_API_KEY = os.environ.get("FLIGHTAWARE_API_KEY")
 # URL/email (generic library user agents get a 403) -- see https://www.planespotters.net/photo/api
 PLANESPOTTERS_USER_AGENT = "plane-tracker/1.0 (+https://github.com/sidholt/plane-tracker)"
 
+# Where the running total of "how many times has this aircraft been spotted" is persisted,
+# so the count survives restarts rather than resetting every time the script starts.
+SPOT_COUNTS_FILE = os.environ.get("SPOT_COUNTS_FILE", "spot_counts.json")
+
 # --------------------------------------------------------
 
 EARTH_RADIUS_KM = 6371.0
@@ -92,6 +96,23 @@ AIRCRAFT_INFO_CACHE = {}
 ROUTE_INFO_CACHE = {}
 PHOTO_CACHE = {}
 SCRAPED_ROUTE_CACHE = {}
+
+
+def load_spot_counts():
+    """Load the persisted icao24 -> total-times-spotted map. icao24 (the aircraft's fixed
+    Mode-S hex address) is used as the key rather than the tail number itself, since it's
+    always available and uniquely identifies one airframe, whereas the tail number can be
+    "unknown" for multiple different planes when no source has a record for them."""
+    try:
+        with open(SPOT_COUNTS_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_spot_counts(counts):
+    with open(SPOT_COUNTS_FILE, "w") as f:
+        json.dump(counts, f)
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -624,7 +645,7 @@ def spell_out_callsign(route, raw_callsign):
     return f"{airline_word.title()} {flight_number}"
 
 
-def format_alert(state, distance_mi, location):
+def format_alert(state, distance_mi, location, spot_count):
     # OpenSky state vector field order:
     # icao24, callsign, origin_country, time_position, last_contact,
     # longitude, latitude, baro_altitude, on_ground, velocity,
@@ -663,6 +684,7 @@ def format_alert(state, distance_mi, location):
         f"\U0001F6EB Route: {route_str}",
         f"\U0001F6E9️ Aircraft: {aircraft_type}",
         f"\U0001F3F7️ Tail: {registration}",
+        f"\U0001F501 Spotted: {spot_count}x",
         f"\U0001F4C8 Altitude: {alt_str}",
         f"\U0001F4A8 Speed: {speed_str}",
         f"\U0001F30E Country: {country}",
@@ -684,6 +706,7 @@ def main():
         print(f"Watching for planes within {loc['radius_mi']} mi of {loc['name']} ({loc['lat']}, {loc['lon']})...")
     cooldown_sec = NOTIFY_COOLDOWN_MIN * 60
     last_notified = {}  # (icao24, location name) -> unix timestamp of last notification
+    spot_counts = load_spot_counts()  # icao24 -> total times this aircraft has been spotted
 
     while True:
         wait_seconds = POLL_SECONDS
@@ -708,12 +731,19 @@ def main():
                         key = (icao24, loc["name"])
                         last_sent = last_notified.get(key)
                         if last_sent is None or (now - last_sent) >= cooldown_sec:
+                            spot_counts[icao24] = spot_counts.get(icao24, 0) + 1
+                            save_spot_counts(spot_counts)
                             photo = lookup_aircraft_photo(icao24, lookup_aircraft(icao24))
                             callsign_raw = (state[1] or "").strip() or icao24
                             username = f"Plane Tracker — {callsign_raw}"
-                            send_discord_message(format_alert(state, distance_mi, loc), photo, username)
+                            send_discord_message(
+                                format_alert(state, distance_mi, loc, spot_counts[icao24]), photo, username
+                            )
                             last_notified[key] = now
-                            print(f"Notified: {icao24} at {distance_mi:.1f} mi from {loc['name']}")
+                            print(
+                                f"Notified: {icao24} at {distance_mi:.1f} mi from {loc['name']} "
+                                f"(spotted {spot_counts[icao24]}x total)"
+                            )
 
             # drop stale entries so this doesn't grow unbounded over a long-running process
             last_notified = {k: v for k, v in last_notified.items() if now - v < cooldown_sec}

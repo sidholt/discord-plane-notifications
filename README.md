@@ -18,6 +18,7 @@ Example alert:
 🛫 Route: Ted Stevens Anchorage (ANC) → Chicago O'Hare (ORD)
 🛩️ Aircraft: Boeing 737NG 8AS/W
 🏷️ Tail: EI-EGA
+🔁 Spotted: 3x
 📈 Altitude: 11484 ft
 💨 Speed: 243 kt
 🌎 Country: United States
@@ -75,6 +76,7 @@ up committed to git.
 | `NOTIFY_COOLDOWN_MIN` | Minimum time before the same aircraft can trigger another alert at the same location |
 | `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` | Optional OpenSky OAuth2 client credentials, raising the daily rate limit from 400 to 4000 requests; leave unset for anonymous access |
 | `FLIGHTAWARE_API_KEY` | Optional AeroAPI key for real, live route data; leave unset to use adsbdb/hexdb only |
+| `SPOT_COUNTS_FILE` | Where the per-aircraft spot counter is persisted (default `spot_counts.json`, next to the script) |
 
 By default, `LOCATIONS` is set up for two slots (`LOCATION_1`, `LOCATION_2`).
 To watch more, add another `location_from_env("LOCATION_3", "...")` entry to
@@ -88,6 +90,11 @@ distance (haversine). For any plane newly within range of a location, it
 looks up flight route and aircraft metadata and posts a formatted message —
 tagged with that location's name — to your Discord webhook. A per-aircraft,
 per-location cooldown prevents duplicate alerts.
+
+Each alert also shows how many times that specific aircraft has ever
+triggered one, tracked by its icao24 (the fixed, unique Mode-S hex address
+underlying its tail number) and persisted to `SPOT_COUNTS_FILE` so the count
+survives restarts.
 
 Route lookups try sources in order of trustworthiness: FlightAware AeroAPI
 first (if configured) for the real live route, then adsbdb, then hexdb.io.
