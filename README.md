@@ -137,7 +137,10 @@ appears at all if neither source has one.
   hammering the API further.
 - Aircraft/route lookups depend on the underlying source having data for
   that aircraft/callsign; general aviation flights will often show up
-  without a route even with all three sources configured.
+  without a route (or a type) even with all three sources configured. A
+  lookup that merely fails (timeout, rate limit) is never cached as a
+  permanent "unknown" — only a source's confirmed no-record response is —
+  so a one-off network hiccup gets retried on the aircraft's next sighting.
 - Tail numbers are the exception: if adsbdb/hexdb don't have one, and the
   icao24 falls in the US allocation block, `icao24_to_n_number()` derives
   the real N-number directly via the FAA's documented assignment algorithm

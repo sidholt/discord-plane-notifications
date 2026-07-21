@@ -196,46 +196,62 @@ def send_discord_message(content, photo=None, username=None):
 
 
 def lookup_aircraft_adsbdb(icao24):
-    """Look up aircraft metadata for an icao24 via the free adsbdb API.
-    Returns a dict with manufacturer/type/icao_type/registration keys, or None on any failure."""
+    """Look up aircraft metadata for an icao24 via the free adsbdb API. Returns a
+    (data, confirmed) pair: data is a manufacturer/type/icao_type/registration dict, or None
+    if there's no record; confirmed is False when the lookup itself failed (timeout, network
+    error, rate limit, malformed response) rather than adsbdb confirming it has no record --
+    callers shouldn't treat that as a definitive "unknown" the way a real 404 is."""
     try:
         resp = requests.get(f"https://api.adsbdb.com/v0/aircraft/{icao24}", timeout=8)
+        if resp.status_code == 404:
+            return None, True
         resp.raise_for_status()
-        return (resp.json().get("response") or {}).get("aircraft") or None
+        return (resp.json().get("response") or {}).get("aircraft") or None, True
     except (requests.RequestException, ValueError, AttributeError):
-        return None
+        return None, False
 
 
 def lookup_aircraft_hexdb(icao24):
     """Look up aircraft metadata for an icao24 via the free hexdb.io API (fallback source
     for when adsbdb doesn't have this aircraft). Normalized to the same key names adsbdb
-    uses, or None on any failure."""
+    uses. Returns a (data, confirmed) pair -- see lookup_aircraft_adsbdb for what that means."""
     try:
         resp = requests.get(f"https://hexdb.io/api/v1/aircraft/{icao24}", timeout=8)
+        if resp.status_code == 404:
+            return None, True
         resp.raise_for_status()
         data = resp.json()
         if not data:
-            return None
+            return None, True
         return {
             "manufacturer": data.get("Manufacturer"),
             "type": data.get("Type"),
             "icao_type": data.get("ICAOTypeCode"),
             "registration": data.get("Registration"),
             "operator": data.get("RegisteredOwners"),
-        }
+        }, True
     except (requests.RequestException, ValueError, AttributeError):
-        return None
+        return None, False
 
 
 def lookup_aircraft(icao24):
     """Look up aircraft metadata for an icao24, trying adsbdb first and falling back to
-    hexdb.io if adsbdb has no record. Returns None if neither source has it."""
+    hexdb.io if adsbdb has no record. Returns None if neither source has it. Only caches a
+    None result once at least one source has actually confirmed it has no record -- if both
+    lookups merely failed (network blip, rate limit), leaves this icao24 uncached so the next
+    sighting retries instead of the aircraft being stuck showing no type for the rest of the
+    run over what may have been a one-off hiccup."""
     if icao24 in AIRCRAFT_INFO_CACHE:
         return AIRCRAFT_INFO_CACHE[icao24]
 
-    result = lookup_aircraft_adsbdb(icao24) or lookup_aircraft_hexdb(icao24)
+    result, confirmed = lookup_aircraft_adsbdb(icao24)
+    if not result:
+        fallback_result, fallback_confirmed = lookup_aircraft_hexdb(icao24)
+        result = result or fallback_result
+        confirmed = confirmed or fallback_confirmed
 
-    AIRCRAFT_INFO_CACHE[icao24] = result
+    if confirmed:
+        AIRCRAFT_INFO_CACHE[icao24] = result
     return result
 
 
