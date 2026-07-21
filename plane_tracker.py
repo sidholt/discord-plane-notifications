@@ -90,7 +90,6 @@ KM_PER_MILE = 1.60934
 # icao24/callsign is often seen across multiple polls.
 AIRCRAFT_INFO_CACHE = {}
 ROUTE_INFO_CACHE = {}
-AIRPORT_REGION_CACHE = {}
 PHOTO_CACHE = {}
 SCRAPED_ROUTE_CACHE = {}
 
@@ -388,7 +387,6 @@ def lookup_flightroute_flightaware(callsign):
         def to_airport(ap):
             ap = ap or {}
             return {
-                "municipality": ap.get("city"),
                 "name": ap.get("name"),
                 "iata_code": ap.get("code_iata"),
                 "icao_code": ap.get("code_icao"),
@@ -443,47 +441,6 @@ def lookup_flightroute(callsign):
         }
 
     ROUTE_INFO_CACHE[callsign] = result
-    return result
-
-
-# Countries for which we show the 2-letter subdivision code (state/province) instead of the
-# country code, since their subdivisions are commonly referred to that way.
-REGION_SUBDIVISION_COUNTRIES = {"US", "CA"}
-
-
-def lookup_airport_region(lat, lon):
-    """Reverse-geocode airport coordinates (via the free Nominatim/OpenStreetMap API) to a
-    2-letter region code: a US state or Canadian province abbreviation (e.g. 'IL', 'ON'), or
-    an ISO country code (e.g. 'GB') for everywhere else. Returns None on any failure or if
-    coordinates are unavailable. Cached per rounded coordinate since airports don't move."""
-    if lat is None or lon is None:
-        return None
-
-    cache_key = (round(lat, 2), round(lon, 2))
-    if cache_key in AIRPORT_REGION_CACHE:
-        return AIRPORT_REGION_CACHE[cache_key]
-
-    result = None
-    try:
-        resp = requests.get(
-            "https://nominatim.openstreetmap.org/reverse",
-            params={"lat": lat, "lon": lon, "format": "json", "zoom": 8},
-            headers={"User-Agent": "plane-tracker (personal hobby project)"},
-            timeout=8,
-        )
-        resp.raise_for_status()
-        address = resp.json().get("address") or {}
-        country_code = (address.get("country_code") or "").upper()
-        if country_code in REGION_SUBDIVISION_COUNTRIES:
-            iso_region = address.get("ISO3166-2-lvl4")  # e.g. "US-IL", "CA-ON"
-            if iso_region and "-" in iso_region:
-                result = iso_region.split("-", 1)[1]
-        if not result:
-            result = country_code or None
-    except (requests.RequestException, ValueError, AttributeError):
-        result = None
-
-    AIRPORT_REGION_CACHE[cache_key] = result
     return result
 
 
@@ -596,13 +553,7 @@ def lookup_flightroute_scrape_flightaware(callsign):
                     def to_airport(ap):
                         ap = ap or {}
                         lon, lat = (ap.get("coord") or [None, None])[:2]
-                        # friendlyLocation is like "San Francisco, CA" / "Mexico City, Mexico"
-                        # -- keep only the city part so describe_airport can append the
-                        # reverse-geocoded region code without duplicating it.
-                        friendly = ap.get("friendlyLocation") or ""
-                        city = friendly.split(",")[0].strip() or None
                         return {
-                            "municipality": city,
                             "name": ap.get("friendlyName"),
                             "iata_code": ap.get("iata"),
                             "icao_code": ap.get("icao"),
@@ -641,16 +592,11 @@ def strip_airport_suffix(name):
 
 def describe_airport(airport):
     airport_name = strip_airport_suffix(airport.get("name"))
-    city = airport.get("municipality")
     code = airport.get("iata_code") or airport.get("icao_code")
-    region = lookup_airport_region(airport.get("latitude"), airport.get("longitude"))
 
-    city_label = f"{city}, {region}" if city and region else (city or region)
-    label = f"{airport_name} — {city_label}" if airport_name and city_label else (airport_name or city_label)
-
-    if label and code:
-        return f"{label} ({code})"
-    return label or code or "unknown"
+    if airport_name and code:
+        return f"{airport_name} ({code})"
+    return airport_name or code or "unknown"
 
 
 def format_route(route):
