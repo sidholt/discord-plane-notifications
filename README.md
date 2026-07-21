@@ -15,7 +15,7 @@ Example alert:
 ✈️  United 123  —  12.3 mi NE of Home
 
 🔢 Flight: UAL123
-🛫 Route: Anchorage, AK (ANC) → Chicago, IL (ORD)
+🛫 Route: Ted Stevens Anchorage — Anchorage, AK (ANC) → Chicago O'Hare — Chicago, IL (ORD)
 🛩️ Aircraft: Boeing 737NG 8AS/W
 🏷️ Tail: EI-EGA
 📈 Altitude: 11484 ft
@@ -110,7 +110,10 @@ Each route airport is labeled with a US state or Canadian province
 abbreviation, or an ISO country code for everywhere else (e.g. "Chicago,
 IL" / "Toronto, ON" vs "London, GB"), reverse-geocoded from its coordinates
 via the free Nominatim/OpenStreetMap API and cached per airport for the life
-of the process.
+of the process. When a source provides the airport's official name, it's
+shown too, with the generic "International Airport" / "Regional Airport" /
+etc. suffix stripped off so just the namesake remains (e.g. "Chicago
+O'Hare International Airport" -> "Chicago O'Hare").
 
 If a photo of that specific tail number exists on planespotters.net, it's
 attached to the Discord message as an embed, crediting the photographer and

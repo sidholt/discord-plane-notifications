@@ -621,12 +621,33 @@ def lookup_flightroute_scrape_flightaware(callsign):
     return result
 
 
+# Strips the generic administrative suffix off an airport's official name (e.g. "Chicago
+# O'Hare International Airport" -> "Chicago O'Hare"), leaving just the namesake. Matches an
+# optional descriptor (International/Regional/etc.) followed by the required Airport-type
+# word at the end of the string.
+_AIRPORT_SUFFIX_RE = re.compile(
+    r"\s*\b(?:International|Intl\.?|Regional|Municipal|Metropolitan|National|County|Memorial)?\s*"
+    r"(?:Airport|Airfield|Air\s*Field|Air\s*Base|Airbase|Field)\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def strip_airport_suffix(name):
+    if not name:
+        return name
+    stripped = _AIRPORT_SUFFIX_RE.sub("", name).strip()
+    return stripped or name
+
+
 def describe_airport(airport):
-    name = airport.get("municipality") or airport.get("name")
+    airport_name = strip_airport_suffix(airport.get("name"))
+    city = airport.get("municipality")
     code = airport.get("iata_code") or airport.get("icao_code")
     region = lookup_airport_region(airport.get("latitude"), airport.get("longitude"))
 
-    label = f"{name}, {region}" if name and region else (name or region)
+    city_label = f"{city}, {region}" if city and region else (city or region)
+    label = f"{airport_name} — {city_label}" if airport_name and city_label else (airport_name or city_label)
+
     if label and code:
         return f"{label} ({code})"
     return label or code or "unknown"
