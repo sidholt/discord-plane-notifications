@@ -486,12 +486,18 @@ def lookup_flightroute(callsign):
 # stored route can be a completely different flight than the plane overhead. We detect that
 # by measuring how far the plane is from the great-circle corridor between the stored route's
 # origin and destination: a plane genuinely flying that route stays within tens of km of the
-# corridor, so being hundreds of km off means the stored route is stale/wrong -- our cue to
-# scrape FlightAware for the real one. This check is only ever used as that trigger; it never
-# changes what's shown to the user directly. (An earlier version compared only the plane's
-# heading to the destination bearing, but that missed wrong routes whose destination happened
-# to lie in roughly the same direction as the plane's real one, e.g. both eastward.)
-ROUTE_CORRIDOR_THRESHOLD_KM = 200
+# corridor, so being well off it means the stored route is stale/wrong -- our cue to scrape
+# FlightAware for the real one. This check is only ever used as that trigger; it never changes
+# what's shown to the user directly. (An earlier version compared only the plane's heading to
+# the destination bearing, but that missed wrong routes whose destination happened to lie in
+# roughly the same direction as the plane's real one, e.g. both eastward.)
+#
+# Threshold picked from observed off-corridor distances: correct routes measured 17-22 km,
+# confirmed-wrong ones 360-2500 km -- and a stale SWA4303 route (SMF->BNA shown while flying
+# near Fremont, actually a different flight reusing that number) measured 123 km and slipped
+# through at the old 200 km threshold uncaught. 75 km keeps a healthy margin above genuine
+# routes while catching that gap.
+ROUTE_CORRIDOR_THRESHOLD_KM = 75
 
 
 def distance_to_route_km(plane_lat, plane_lon, o_lat, o_lon, d_lat, d_lon):

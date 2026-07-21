@@ -105,9 +105,10 @@ days, so their stored route is sometimes completely wrong for the plane
 actually overhead. To catch that, the script measures how far the plane is
 from the great-circle corridor between the stored route's origin and
 destination; a plane genuinely on that route stays within tens of km of the
-corridor, so when it's hundreds of km off, the stored route is treated as
-stale and the script scrapes FlightAware's public flight page for the real
-live route and shows that instead. This scrape parses data embedded in a
+corridor, so being much further off (past `ROUTE_CORRIDOR_THRESHOLD_KM`)
+means the stored route is treated as stale, and the script scrapes
+FlightAware's public flight page for the real live route and shows that
+instead. This scrape parses data embedded in a
 webpage rather than a documented API, so it's fragile and likely against
 FlightAware's terms of service for automated access — it's kept rare by only
 firing on routes that already look wrong, and cached per callsign. Aircraft
