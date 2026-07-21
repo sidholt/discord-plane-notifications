@@ -77,6 +77,7 @@ up committed to git.
 | `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` | Optional OpenSky OAuth2 client credentials, raising the daily rate limit from 400 to 4000 requests; leave unset for anonymous access |
 | `FLIGHTAWARE_API_KEY` | Optional AeroAPI key for real, live route data; leave unset to use adsbdb/hexdb only |
 | `SPOT_COUNTS_FILE` | Where the per-aircraft spot counter is persisted (default `spot_counts.json`, next to the script) |
+| `LAST_NOTIFIED_FILE` | Where the per-aircraft, per-location notification cooldown is persisted (default `last_notified.json`, next to the script) |
 
 By default, `LOCATIONS` is set up for two slots (`LOCATION_1`, `LOCATION_2`).
 To watch more, add another `location_from_env("LOCATION_3", "...")` entry to
@@ -89,7 +90,9 @@ bounding box around its coordinates, then filters by exact great-circle
 distance (haversine). For any plane newly within range of a location, it
 looks up flight route and aircraft metadata and posts a formatted message —
 tagged with that location's name — to your Discord webhook. A per-aircraft,
-per-location cooldown prevents duplicate alerts.
+per-location cooldown prevents duplicate alerts, persisted to
+`LAST_NOTIFIED_FILE` so restarting the script mid-pass doesn't forget an
+aircraft was already notified about and treat it as a brand-new sighting.
 
 Each alert also shows how many times that specific aircraft has ever
 triggered one, tracked by its icao24 (the fixed, unique Mode-S hex address

@@ -85,6 +85,11 @@ PLANESPOTTERS_USER_AGENT = "plane-tracker/1.0 (+https://github.com/sidholt/plane
 # so the count survives restarts rather than resetting every time the script starts.
 SPOT_COUNTS_FILE = os.environ.get("SPOT_COUNTS_FILE", "spot_counts.json")
 
+# Where the per-aircraft, per-location notification cooldown is persisted, so a restart
+# doesn't forget an aircraft was already notified about and double-count/double-notify the
+# same continuous pass as a brand-new sighting.
+LAST_NOTIFIED_FILE = os.environ.get("LAST_NOTIFIED_FILE", "last_notified.json")
+
 # --------------------------------------------------------
 
 EARTH_RADIUS_KM = 6371.0
@@ -108,6 +113,25 @@ def load_spot_counts():
             return json.load(f)
     except (OSError, ValueError):
         return {}
+
+
+def load_last_notified():
+    """Load the persisted (icao24, location name) -> last-notified unix timestamp map."""
+    try:
+        with open(LAST_NOTIFIED_FILE) as f:
+            records = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return {(r["icao24"], r["location"]): r["last_notified"] for r in records}
+
+
+def save_last_notified(last_notified):
+    records = [
+        {"icao24": icao24, "location": loc_name, "last_notified": ts}
+        for (icao24, loc_name), ts in last_notified.items()
+    ]
+    with open(LAST_NOTIFIED_FILE, "w") as f:
+        json.dump(records, f)
 
 
 def save_spot_counts(counts):
@@ -727,7 +751,7 @@ def main():
     for loc in LOCATIONS:
         print(f"Watching for planes within {loc['radius_mi']} mi of {loc['name']} ({loc['lat']}, {loc['lon']})...")
     cooldown_sec = NOTIFY_COOLDOWN_MIN * 60
-    last_notified = {}  # (icao24, location name) -> unix timestamp of last notification
+    last_notified = load_last_notified()  # (icao24, location name) -> unix timestamp of last notification
     spot_counts = load_spot_counts()  # icao24 -> total times this aircraft has been spotted
 
     while True:
@@ -762,6 +786,7 @@ def main():
                                 format_alert(state, distance_mi, loc, spot_counts[icao24]), photo, username
                             )
                             last_notified[key] = now
+                            save_last_notified(last_notified)
                             print(
                                 f"Notified: {icao24} at {distance_mi:.1f} mi from {loc['name']} "
                                 f"(spotted {spot_counts[icao24]}x total)"
